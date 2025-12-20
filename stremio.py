@@ -372,19 +372,6 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
         hls_auto["subtitles"] = subtitles
     streams.append(hls_auto)
 
-    # 4. External link to SegmentPlayer web player
-    player_url = f"{base_url}/#/play/{encoded_path}"
-    player_stream = {
-        "externalUrl": player_url,
-        "title": "Open in SegmentPlayer",
-        "name": "SegmentPlayer Web",
-        "behaviorHints": {
-            "notWebReady": True,
-            "bingeGroup": "segmentplayer-external",
-        }
-    }
-    streams.append(player_stream)
-
     return {"streams": streams}
 
 
