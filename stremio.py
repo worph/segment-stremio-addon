@@ -29,8 +29,8 @@ MEDIA_DIR = os.environ.get('MEDIA_DIR', '/data/media')
 # Video file extensions
 VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.m2ts'}
 
-# Manifest definition
-MANIFEST = {
+# Base manifest definition (name fields are set dynamically based on host)
+BASE_MANIFEST = {
     "id": "com.segmentplayer.addon",
     "version": "1.0.0",
     "name": "SegmentPlayer",
@@ -67,6 +67,14 @@ MANIFEST = {
         "configurationRequired": False
     }
 }
+
+
+def get_manifest(host: str) -> dict:
+    """Generate manifest with host in the addon name."""
+    manifest = json.loads(json.dumps(BASE_MANIFEST))  # Deep copy
+    manifest["name"] = f"SegmentPlayer @ {host}"
+    manifest["catalogs"][0]["name"] = f"SegmentPlayer @ {host}"
+    return manifest
 
 
 def get_file_id(filepath: str) -> str:
@@ -386,9 +394,10 @@ class StremioHandler:
     def __init__(self):
         pass
 
-    def handle_manifest(self) -> tuple[bytes, str]:
-        """Return addon manifest."""
-        return json.dumps(MANIFEST).encode(), 'application/json'
+    def handle_manifest(self, host: str = "localhost") -> tuple[bytes, str]:
+        """Return addon manifest with host in the name."""
+        manifest = get_manifest(host)
+        return json.dumps(manifest).encode(), 'application/json'
 
     def handle_catalog(self, catalog_type: str, catalog_id: str, extra: dict = None) -> tuple[bytes, str]:
         """Return catalog of videos."""

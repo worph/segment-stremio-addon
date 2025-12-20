@@ -133,8 +133,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(content.encode('utf-8'))
 
     def handle_stremio_manifest(self):
-        data, content_type = stremio_handler.handle_manifest()
+        host = self.get_host()
+        data, content_type = stremio_handler.handle_manifest(host)
         self.send_data(data, content_type)
+
+    def get_host(self) -> str:
+        """Extract host from request headers (without protocol or port)."""
+        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
+        # Remove port if present
+        if ':' in host and not host.startswith('['):  # Handle IPv6
+            host = host.rsplit(':', 1)[0]
+        return host
 
     def handle_stremio_catalog(self, catalog_type: str, catalog_id: str, extra: str = None):
         extra_dict = {}
@@ -169,7 +178,7 @@ class Handler(BaseHTTPRequestHandler):
         Extract base URL from request headers with intelligent protocol detection.
         Handles reverse proxy headers (X-Forwarded-Proto, Forwarded, Referer).
         """
-        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost:7000')
+        host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
 
         # Protocol detection with multiple fallbacks
         proto = self.headers.get('X-Forwarded-Proto', '')

@@ -21,3 +21,4 @@ Thumbs.db
 # Docker
 .docker/
 CLAUDE.md
+.claude/settings.local.json
