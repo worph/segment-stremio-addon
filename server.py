@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Stremio Addon Server for SegmentPlayer
+Stremio Addon Server with Integrated HLS Transcoder
 
-A standalone Stremio addon that catalogs media files and generates stream URLs
-pointing to a SegmentPlayer instance for transcoding.
+A standalone Stremio addon that:
+1. Catalogs media files and provides Stremio-compatible API
+2. Transcodes video on-the-fly using FFmpeg with adaptive quality
+3. Serves HLS streams with muxed video+audio segments
+4. Supports direct file serving with range requests
 
 Environment Variables:
 - MEDIA_DIR: Directory containing video files (default: /data/media)
+- CACHE_DIR: Directory for transcoded segments (default: /data/cache)
 - PORT: HTTP server port (default: 7000)
+- SEGMENT_DURATION: HLS segment length in seconds (default: 4)
+- PREFETCH_SEGMENTS: How many segments to prefetch ahead (default: 4)
 """
 from __future__ import annotations
 
@@ -18,7 +24,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
 import threading
 
-from stremio import StremioHandler
+from stremio import StremioHandler, get_media_file_count
+import transcoder
 
 # Configuration
 PORT = int(os.environ.get('PORT', '7000'))
@@ -56,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_HEAD(self):
-        """Handle HEAD requests for health checks."""
+        """Handle HEAD requests for health checks and streaming."""
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
 
@@ -67,6 +74,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json')
             else:
                 self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+        elif path.startswith('/transcode/') or path.startswith('/direct/'):
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            if path.endswith('.m3u8'):
+                self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+            elif path.endswith('.ts'):
+                self.send_header('Content-Type', 'video/mp2t')
+            elif path.endswith('.vtt'):
+                self.send_header('Content-Type', 'text/vtt')
+            else:
+                self.send_header('Content-Type', 'application/octet-stream')
             self.end_headers()
         else:
             self.send_error(404)
@@ -102,6 +121,53 @@ class Handler(BaseHTTPRequestHandler):
         m = re.match(r'^(?:/stremio)?/stream/(\w+)/([^/]+)\.json$', path)
         if m:
             return self.handle_stremio_stream(m.group(1), m.group(2))
+
+        # === Transcoder endpoints ===
+
+        # Metrics
+        if path == '/transcode/metrics':
+            metrics = transcoder.get_metrics()
+            metrics['total_files'] = get_media_file_count()
+            return self.send_json(metrics)
+
+        if path == '/transcode/reset-metrics':
+            transcoder.reset_metrics()
+            return self.send_json({'status': 'ok'})
+
+        # Direct file serving with range support
+        m = re.match(r'^/direct/(.+)$', path)
+        if m:
+            return self.handle_direct_file(m.group(1))
+
+        # Master playlist (all resolutions)
+        m = re.match(r'^/transcode/(.+?)/master\.m3u8$', path)
+        if m:
+            return self.handle_master_playlist(m.group(1))
+
+        # Quality-specific master playlist (e.g., master_720p.m3u8, master_original.m3u8)
+        m = re.match(r'^/transcode/(.+?)/master_(\w+)\.m3u8$', path)
+        if m:
+            return self.handle_master_playlist(m.group(1), m.group(2))
+
+        # Stream playlist (muxed video+audio)
+        m = re.match(r'^/transcode/(.+?)/stream_a(\d+)_(\w+)\.m3u8$', path)
+        if m:
+            return self.handle_stream_playlist(m.group(1), int(m.group(2)), m.group(3))
+
+        # Muxed video+audio segment
+        m = re.match(r'^/transcode/(.+?)/seg_a(\d+)_(\w+)_(\d+)\.ts$', path)
+        if m:
+            return self.handle_segment(m.group(1), int(m.group(2)), m.group(3), int(m.group(4)))
+
+        # Subtitle playlist
+        m = re.match(r'^/transcode/(.+?)/subtitle_(\d+)\.m3u8$', path)
+        if m:
+            return self.handle_subtitle_playlist(m.group(1), int(m.group(2)))
+
+        # Subtitle VTT
+        m = re.match(r'^/transcode/(.+?)/subtitle_(\d+)\.vtt$', path)
+        if m:
+            return self.handle_subtitle_vtt(m.group(1), int(m.group(2)))
 
         self.send_error(404)
 
@@ -173,6 +239,150 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404, "Video not found")
 
+    # === Transcoder handlers ===
+
+    def get_file_info(self, filepath: str):
+        """Get file path and info, or send error."""
+        full_path = os.path.join(transcoder.MEDIA_DIR, filepath)
+        if not os.path.exists(full_path):
+            self.send_error(404, f"File not found: {filepath}")
+            return None, None, None
+
+        info = transcoder.get_video_info(full_path)
+        if not info:
+            self.send_error(500, "Could not probe file")
+            return None, None, None
+
+        return full_path, transcoder.get_file_hash(filepath), info
+
+    def handle_master_playlist(self, filepath: str, resolution: str = None):
+        """Generate and serve master HLS playlist."""
+        full_path, file_hash, info = self.get_file_info(filepath)
+        if not info:
+            return
+
+        playlist = transcoder.generate_master_playlist(info, resolution)
+        self.send_data(playlist.encode(), 'application/vnd.apple.mpegurl')
+
+    def handle_stream_playlist(self, filepath: str, audio: int, resolution: str):
+        """Generate and serve stream playlist for specific audio track and resolution."""
+        full_path, file_hash, info = self.get_file_info(filepath)
+        if not info:
+            return
+
+        playlist = transcoder.generate_stream_playlist(info, audio, resolution)
+        self.send_data(playlist.encode(), 'application/vnd.apple.mpegurl')
+
+    def handle_segment(self, filepath: str, audio: int, resolution: str, segment: int):
+        """Transcode and serve a muxed video+audio segment."""
+        full_path, file_hash, info = self.get_file_info(filepath)
+        if not info:
+            return
+
+        # Update codec info and current file in metrics
+        video_codec, audio_codec = transcoder.extract_codecs(info)
+        transcoder.segment_manager.set_codec_info(video_codec, audio_codec, filepath)
+
+        data = transcoder.get_or_transcode_segment(filepath, file_hash, audio, resolution, segment, info)
+        if data:
+            self.send_data(data, 'video/mp2t')
+        else:
+            self.send_error(500, "Transcode failed")
+
+    def handle_subtitle_playlist(self, filepath: str, sub_index: int):
+        """Generate and serve subtitle playlist."""
+        full_path, file_hash, info = self.get_file_info(filepath)
+        if not info:
+            return
+
+        playlist = transcoder.generate_subtitle_playlist(info, sub_index)
+        self.send_data(playlist.encode(), 'application/vnd.apple.mpegurl')
+
+    def handle_subtitle_vtt(self, filepath: str, sub_index: int):
+        """Extract and serve subtitle as WebVTT."""
+        full_path, file_hash, info = self.get_file_info(filepath)
+        if not info:
+            return
+
+        key = f"{file_hash}:sub:{sub_index}"
+        content, error = transcoder.subtitle_manager.get_subtitle(key, full_path, file_hash, sub_index, info)
+
+        if content:
+            self.send_data(content.encode('utf-8'), 'text/vtt')
+        else:
+            # Return empty VTT with error as note so playback continues
+            error_vtt = f"WEBVTT\n\nNOTE Subtitle extraction failed: {error or 'Unknown error'}\n"
+            self.send_data(error_vtt.encode('utf-8'), 'text/vtt')
+
+    def handle_direct_file(self, filepath: str):
+        """Serve raw video file with range request support for seeking."""
+        full_path = os.path.join(transcoder.MEDIA_DIR, filepath)
+        if not os.path.exists(full_path):
+            self.send_error(404, f"File not found: {filepath}")
+            return
+
+        # Determine content type
+        ext = os.path.splitext(filepath)[1].lower()
+        content_types = {
+            '.mp4': 'video/mp4',
+            '.mkv': 'video/x-matroska',
+            '.webm': 'video/webm',
+            '.avi': 'video/x-msvideo',
+            '.mov': 'video/quicktime',
+            '.m4v': 'video/x-m4v',
+            '.ts': 'video/mp2t',
+            '.m2ts': 'video/mp2t',
+        }
+        content_type = content_types.get(ext, 'application/octet-stream')
+
+        file_size = os.path.getsize(full_path)
+        range_header = self.headers.get('Range')
+
+        if range_header:
+            # Parse range request (e.g., "bytes=0-1023")
+            range_match = re.match(r'bytes=(\d*)-(\d*)', range_header)
+            if range_match:
+                start = int(range_match.group(1)) if range_match.group(1) else 0
+                end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+                end = min(end, file_size - 1)
+                length = end - start + 1
+
+                self.send_response(206)  # Partial Content
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', length)
+                self.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+                self.send_header('Accept-Ranges', 'bytes')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+
+                with open(full_path, 'rb') as f:
+                    f.seek(start)
+                    remaining = length
+                    chunk_size = 64 * 1024  # 64KB chunks
+                    while remaining > 0:
+                        chunk = f.read(min(chunk_size, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                return
+
+        # No range request - serve entire file
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', file_size)
+        self.send_header('Accept-Ranges', 'bytes')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+
+        with open(full_path, 'rb') as f:
+            chunk_size = 64 * 1024
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def get_base_url(self) -> str:
         """
         Extract base URL from request headers with intelligent protocol detection.
@@ -225,11 +435,12 @@ class ThreadedServer(HTTPServer):
 
 
 def main():
-    media_dir = os.environ.get('MEDIA_DIR', '/data/media')
-    print(f"Stremio Addon Server starting on port {PORT}")
-    print(f"Media directory: {media_dir}")
+    print(f"Stremio Addon with HLS Transcoder starting on port {PORT}")
+    print(f"Media: {transcoder.MEDIA_DIR} | Cache: {transcoder.CACHE_DIR}")
+    print(f"Segment: {transcoder.SEGMENT_DURATION}s | Prefetch: {transcoder.PREFETCH_SEGMENTS} segments")
     print(f"Manifest URL: http://localhost:{PORT}/manifest.json")
-    print("Stream URLs auto-detected from request headers")
+    print(f"Metrics URL: http://localhost:{PORT}/transcode/metrics")
+    print("Adaptive quality: target 60-80% transcode ratio")
     ThreadedServer(('0.0.0.0', PORT), Handler).serve_forever()
 
 

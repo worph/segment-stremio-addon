@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SegmentPlayer - Stremio Addon</title>
+    <title>Segment Stremio Addon</title>
     <style>
         * {
             margin: 0;
@@ -209,15 +209,318 @@
         a {
             color: #4dabf7;
         }
+        /* Metrics Panel Styles */
+        .metrics-toggle {
+            background: #4dabf7;
+            color: #000;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .metrics-toggle:hover {
+            background: #74c0fc;
+        }
+        .metrics-toggle.active {
+            background: #51cf66;
+        }
+        .metrics-panel {
+            display: none;
+            margin-top: 1rem;
+        }
+        .metrics-panel.active {
+            display: block;
+        }
+        .metrics-section {
+            margin-bottom: 1.25rem;
+        }
+        .metrics-section:last-child {
+            margin-bottom: 0;
+        }
+        .metrics-section h3 {
+            color: #22d3ee;
+            margin-bottom: 0.75rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 0.5rem;
+        }
+        .metric-item {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.6rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+        .metric-value.good { color: #51cf66; }
+        .metric-value.warning { color: #ffd43b; }
+        .metric-value.bad { color: #ff6b6b; }
+        .metric-label {
+            font-size: 0.65rem;
+            color: #888;
+            margin-top: 0.2rem;
+            text-transform: uppercase;
+        }
+        .adaptive-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        .adaptive-item {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            padding: 0.75rem;
+            text-align: center;
+        }
+        .adaptive-label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+            margin-bottom: 0.3rem;
+        }
+        .adaptive-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #fff;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+        .adaptive-bar {
+            height: 10px;
+            border-radius: 5px;
+            position: relative;
+            margin-bottom: 0.3rem;
+        }
+        .preset-bar {
+            background: linear-gradient(to right, #ff922b, #ffd43b 30%, #51cf66 60%, #4dabf7);
+        }
+        .crf-bar {
+            background: linear-gradient(to right, #51cf66, #ffd43b 40%, #ff922b 70%, #ff6b6b);
+        }
+        .adaptive-bar-fill {
+            position: absolute;
+            top: -2px;
+            height: 14px;
+            width: 6px;
+            background: #fff;
+            border-radius: 3px;
+            box-shadow: 0 0 6px rgba(0,0,0,0.5), 0 0 3px rgba(255,255,255,0.8);
+            transition: left 0.3s ease;
+            transform: translateX(-50%);
+        }
+        .adaptive-range {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.6rem;
+            color: #666;
+        }
+        .adaptive-range .range-good { color: #51cf66; }
+        .adaptive-range .range-fast { color: #ff922b; }
+        .adaptive-stats {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: center;
+            margin-top: 0.5rem;
+        }
+        .adaptive-stats span {
+            padding: 0.2rem 0.5rem;
+            background: rgba(0,0,0,0.3);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .stat-up { color: #51cf66; }
+        .stat-down { color: #ff6b6b; }
+        .ratio-gauge {
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
+            padding: 0.75rem;
+        }
+        .ratio-bar {
+            position: relative;
+            height: 24px;
+            background: linear-gradient(to right,
+                #51cf66 0%, #51cf66 60%,
+                #51cf66 60%, #51cf66 80%,
+                #ffd43b 80%, #ffd43b 90%,
+                #ff6b6b 90%, #ff6b6b 100%
+            );
+            border-radius: 6px;
+            margin-bottom: 0.4rem;
+            overflow: visible;
+        }
+        .ratio-target {
+            position: absolute;
+            top: 0;
+            left: 60%;
+            width: 20%;
+            height: 100%;
+            background: rgba(255,255,255,0.15);
+            border: 2px solid rgba(255,255,255,0.4);
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .ratio-needle {
+            position: absolute;
+            top: -6px;
+            width: 4px;
+            height: 36px;
+            background: #fff;
+            border-radius: 2px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            transform: translateX(-50%);
+            transition: left 0.3s ease;
+            left: 0%;
+        }
+        .ratio-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.65rem;
+            color: #666;
+            padding: 0 0.25rem;
+        }
+        .ratio-labels .target-label {
+            color: #51cf66;
+            font-weight: 600;
+        }
+        .ratio-value {
+            text-align: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-top: 0.5rem;
+        }
+        .idle-message {
+            text-align: center;
+            color: #888;
+            padding: 2rem;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>
-                SegmentPlayer <span class="badge">STREMIO ADDON</span>
+                Segment Stremio Addon
             </h1>
+            <button class="metrics-toggle" id="metricsToggle">Metrics</button>
         </header>
+
+        <!-- Live Metrics Panel -->
+        <div class="card" id="metricsCard" style="display: none;">
+            <h2>&#128202; Live Transcoding Metrics</h2>
+            <div class="metrics-panel active" id="metricsPanel">
+                <div id="metricsContent">
+                    <div class="idle-message" id="idleMessage">
+                        <div style="margin-bottom: 0.5rem;">No active transcoding</div>
+                        <div style="font-size: 0.9rem;">Media library: <strong id="totalFilesIdle">0</strong> files</div>
+                        <div style="font-size: 0.85rem; margin-top: 0.5rem;">Start playing a video in Stremio to see live metrics.</div>
+                    </div>
+                </div>
+                <div id="activeMetrics" style="display: none;">
+                    <div class="metrics-section">
+                        <h3>Now Playing</h3>
+                        <div class="now-playing-file" id="nowPlayingFile" style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 8px; word-break: break-all; color: #51cf66; font-family: monospace; font-size: 0.85rem;">-</div>
+                    </div>
+                    <div class="metrics-section">
+                        <h3>Source Codecs</h3>
+                        <div class="metrics-grid" style="grid-template-columns: 1fr 1fr;">
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricVideoCodec">-</div>
+                                <div class="metric-label">Video</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricAudioCodec">-</div>
+                                <div class="metric-label">Audio</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="metrics-section">
+                        <h3>Adaptive Quality</h3>
+                        <div class="adaptive-grid">
+                            <div class="adaptive-item">
+                                <div class="adaptive-label">Encoder Preset</div>
+                                <div class="adaptive-value" id="metricPreset">fast</div>
+                                <div class="adaptive-bar preset-bar">
+                                    <div class="adaptive-bar-fill" id="presetBar" style="left: 50%;"></div>
+                                </div>
+                                <div class="adaptive-range">
+                                    <span class="range-fast">ultrafast</span>
+                                    <span class="range-good">medium</span>
+                                </div>
+                                <div class="adaptive-stats">
+                                    <span class="stat-up" id="presetAdjustUp" title="Quality increases">&#9650; 0</span>
+                                    <span class="stat-down" id="presetAdjustDown" title="Quality decreases">&#9660; 0</span>
+                                </div>
+                            </div>
+                            <div class="adaptive-item">
+                                <div class="adaptive-label">CRF Offset</div>
+                                <div class="adaptive-value" id="metricCRF">+0</div>
+                                <div class="adaptive-bar crf-bar">
+                                    <div class="adaptive-bar-fill" id="crfBar" style="left: 0%;"></div>
+                                </div>
+                                <div class="adaptive-range">
+                                    <span class="range-good">+0 best</span>
+                                    <span class="range-fast">+7 fast</span>
+                                </div>
+                                <div class="adaptive-stats">
+                                    <span class="stat-up" id="crfAdjustDown" title="Quality increases">&#9650; 0</span>
+                                    <span class="stat-down" id="crfAdjustUp" title="Quality decreases">&#9660; 0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="metrics-section">
+                        <h3>Transcode Ratio</h3>
+                        <div class="ratio-gauge">
+                            <div class="ratio-bar">
+                                <div class="ratio-target"></div>
+                                <div class="ratio-needle" id="ratioNeedle"></div>
+                            </div>
+                            <div class="ratio-labels">
+                                <span>0%</span>
+                                <span>50%</span>
+                                <span class="target-label">60-80%</span>
+                                <span>100%</span>
+                            </div>
+                            <div class="ratio-value" id="ratioValue">-</div>
+                        </div>
+                    </div>
+                    <div class="metrics-section">
+                        <h3>Performance</h3>
+                        <div class="metrics-grid">
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricRatioAvg">-</div>
+                                <div class="metric-label">Avg Ratio</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricRatioLast">-</div>
+                                <div class="metric-label">Last Ratio</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricCacheHit">-</div>
+                                <div class="metric-label">Cache Hit</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricSegments">-</div>
+                                <div class="metric-label">Segments</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Introduction -->
         <div class="card">
@@ -264,12 +567,6 @@
                 <button class="copy-btn" onclick="copyUrl()">Copy</button>
             </div>
 
-            <div class="note warning">
-                <p>
-                    <strong>Important:</strong> Replace <code>localhost</code> with your server's IP address
-                    (e.g., <code>192.168.1.100</code>) if accessing from another device.
-                </p>
-            </div>
 
             <h3>Step 2: Install in Stremio</h3>
 
@@ -303,7 +600,7 @@
 
             <h3>Step 3: Browse Your Library</h3>
             <p>
-                After installation, you'll find "SegmentPlayer" in your Stremio catalog.
+                After installation, you'll find "SSA" in your Stremio catalog.
                 Click on it to browse your media files. Select any video to see available streams.
             </p>
 
@@ -340,14 +637,14 @@
 
             <h3>Addon not loading?</h3>
             <ul>
-                <li>Make sure both this addon and SegmentPlayer are running</li>
+                <li>Make sure this addon is running</li>
                 <li>Check that the URL is accessible from your device (try opening it in a browser)</li>
                 <li>If using Docker, ensure ports are properly mapped</li>
             </ul>
 
             <h3>Videos not playing?</h3>
             <ul>
-                <li>Verify SegmentPlayer is running and accessible</li>
+                <li>Verify the addon is running and accessible</li>
                 <li>Check that your media files are in the configured media directory</li>
                 <li>Try the web player first to verify transcoding works</li>
             </ul>
@@ -360,28 +657,6 @@
             </ul>
         </div>
 
-        <!-- Technical Info -->
-        <div class="card">
-            <h2>&#128196; Technical Details</h2>
-
-            <h3>API Endpoints</h3>
-            <ul>
-                <li><code>GET /manifest.json</code> - Addon manifest</li>
-                <li><code>GET /catalog/:type/:id.json</code> - Video catalog</li>
-                <li><code>GET /meta/:type/:id.json</code> - Video metadata</li>
-                <li><code>GET /stream/:type/:id.json</code> - Stream URLs</li>
-                <li><code>GET /health</code> - Health check</li>
-            </ul>
-
-            <h3>Environment Variables</h3>
-            <ul>
-                <li><code>MEDIA_DIR</code> - Media directory path (default: /data/media)</li>
-                <li><code>PORT</code> - Server port (default: 7000)</li>
-            </ul>
-            <p style="margin-top: 0.5rem; font-size: 0.9rem; color: #888;">
-                Stream URLs are auto-detected from request headers.
-            </p>
-        </div>
     </div>
 
     <script>
@@ -425,6 +700,111 @@
             const installUrl = getInstallUrl();
             window.location.href = installUrl;
         }
+
+        // Metrics functionality
+        const PRESETS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium'];
+        let metricsInterval = null;
+
+        function formatRatio(ratio) {
+            return ratio ? ratio.toFixed(1) + "%" : "-";
+        }
+
+        function getRatioClass(ratio) {
+            if (!ratio) return "";
+            if (ratio >= 60 && ratio <= 80) return "good";
+            if (ratio < 60) return "good";
+            if (ratio < 90) return "warning";
+            return "bad";
+        }
+
+        async function fetchMetrics() {
+            try {
+                const response = await fetch("/transcode/metrics");
+                if (!response.ok) return;
+
+                const data = await response.json();
+
+                // Update total files count (always, even when idle)
+                if (data.total_files !== undefined) {
+                    document.getElementById("totalFilesIdle").textContent = data.total_files;
+                }
+
+                // Check if there's any transcoding activity
+                const hasActivity = data.total_segments > 0;
+                document.getElementById("idleMessage").style.display = hasActivity ? "none" : "block";
+                document.getElementById("activeMetrics").style.display = hasActivity ? "block" : "none";
+
+                if (!hasActivity) return;
+
+                // Update adaptive quality display
+                if (data.adaptive_quality) {
+                    const aq = data.adaptive_quality;
+
+                    // Preset
+                    document.getElementById("metricPreset").textContent = aq.preset || "fast";
+                    const presetIndex = PRESETS.indexOf(aq.preset);
+                    const presetPosition = presetIndex >= 0 ? (presetIndex / (PRESETS.length - 1)) * 100 : 50;
+                    document.getElementById("presetBar").style.left = presetPosition + "%";
+                    document.getElementById("presetAdjustUp").innerHTML = "&#9650; " + (aq.preset_adjustments?.up || 0);
+                    document.getElementById("presetAdjustDown").innerHTML = "&#9660; " + (aq.preset_adjustments?.down || 0);
+
+                    // CRF
+                    document.getElementById("metricCRF").textContent = "+" + (aq.crf_offset || 0);
+                    const crfPosition = ((aq.crf_offset || 0) / 7) * 100;
+                    document.getElementById("crfBar").style.left = crfPosition + "%";
+                    document.getElementById("crfAdjustDown").innerHTML = "&#9650; " + (aq.crf_adjustments?.down || 0);
+                    document.getElementById("crfAdjustUp").innerHTML = "&#9660; " + (aq.crf_adjustments?.up || 0);
+                }
+
+                // Update ratio gauge
+                const avgRatio = data.transcode_ratio_avg || 0;
+                const needlePos = Math.min(100, Math.max(0, avgRatio));
+                document.getElementById("ratioNeedle").style.left = needlePos + "%";
+                document.getElementById("ratioValue").textContent = formatRatio(avgRatio);
+                document.getElementById("ratioValue").className = "ratio-value " + getRatioClass(avgRatio);
+
+                // Update performance metrics
+                document.getElementById("metricRatioAvg").textContent = formatRatio(data.transcode_ratio_avg);
+                document.getElementById("metricRatioAvg").className = "metric-value " + getRatioClass(data.transcode_ratio_avg);
+
+                document.getElementById("metricRatioLast").textContent = formatRatio(data.transcode_ratio_last);
+                document.getElementById("metricRatioLast").className = "metric-value " + getRatioClass(data.transcode_ratio_last);
+
+                document.getElementById("metricCacheHit").textContent = data.cache_hit_rate ? data.cache_hit_rate.toFixed(1) + "%" : "-";
+                document.getElementById("metricCacheHit").className = "metric-value " + (data.cache_hit_rate > 50 ? "good" : "");
+
+                document.getElementById("metricSegments").textContent = data.total_segments || 0;
+
+                // Update codec info
+                document.getElementById("metricVideoCodec").textContent = data.video_codec ? data.video_codec.toUpperCase() : "-";
+                document.getElementById("metricAudioCodec").textContent = data.audio_codec ? data.audio_codec.toUpperCase() : "-";
+
+                // Update current file
+                document.getElementById("nowPlayingFile").textContent = data.current_file || "-";
+
+            } catch (err) {
+                console.error("Failed to fetch metrics:", err);
+            }
+        }
+
+        // Metrics toggle
+        document.getElementById("metricsToggle").addEventListener("click", function() {
+            this.classList.toggle("active");
+            const metricsCard = document.getElementById("metricsCard");
+            const isActive = this.classList.contains("active");
+
+            metricsCard.style.display = isActive ? "block" : "none";
+
+            if (isActive) {
+                fetchMetrics();
+                metricsInterval = setInterval(fetchMetrics, 2000);
+            } else {
+                if (metricsInterval) {
+                    clearInterval(metricsInterval);
+                    metricsInterval = null;
+                }
+            }
+        });
     </script>
 </body>
 </html>

@@ -53,11 +53,10 @@ BASE_MANIFEST = {
     "catalogs": [
         {
             "type": "movie",
-            "id": "segmentplayer_all",
-            "name": "SegmentPlayer",
+            "id": "ssa_all",
+            "name": "SSA",
             "extra": [
-                {"name": "search", "isRequired": False},
-                {"name": "genre", "isRequired": False}
+                {"name": "search", "isRequired": False}
             ]
         }
     ],
@@ -70,10 +69,32 @@ BASE_MANIFEST = {
 
 
 def get_manifest(host: str) -> dict:
-    """Generate manifest with host in the addon name."""
+    """Generate manifest with host in the addon ID and name.
+
+    This allows the same addon to be added multiple times with different hosts,
+    as Stremio identifies addons by their ID.
+    """
     manifest = json.loads(json.dumps(BASE_MANIFEST))  # Deep copy
-    manifest["name"] = f"SegmentPlayer @ {host}"
-    manifest["catalogs"][0]["name"] = f"SegmentPlayer @ {host}"
+
+    # Build reverse-DNS style ID: com.example.ssa.7000
+    # Split host and port
+    if ':' in host:
+        domain, port = host.rsplit(':', 1)
+    else:
+        domain, port = host, None
+
+    # Reverse domain parts (example.com -> com.example)
+    domain_parts = domain.split('.')
+    reversed_domain = '.'.join(reversed(domain_parts))
+
+    # Build ID: reversed_domain.ssa[.port]
+    addon_id = f"{reversed_domain}.ssa"
+    if port:
+        addon_id += f".{port}"
+
+    manifest["id"] = addon_id
+    manifest["name"] = f"SSA @ {host}"
+    manifest["catalogs"][0]["name"] = f"SSA @ {host}"
     return manifest
 
 
@@ -193,13 +214,9 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}m"
 
 
-def create_catalog_response(search: Optional[str] = None, genre: Optional[str] = None) -> dict:
+def create_catalog_response(search: Optional[str] = None) -> dict:
     """Create catalog response with all videos."""
     videos = scan_media_files()
-
-    # Apply genre (folder) filter if provided
-    if genre:
-        videos = [v for v in videos if v['folder'] == genre]
 
     # Apply search filter if provided
     if search:
@@ -214,12 +231,7 @@ def create_catalog_response(search: Optional[str] = None, genre: Optional[str] =
             "name": video['name'],
             "poster": "",  # We don't have posters
             "description": f"File: {video['filename']}\nSize: {format_size(video['size'])}",
-            "genres": [video['folder']],  # Use folder as genre for filtering
         }
-
-        # Add folder info to description
-        if video['folder'] != "Root":
-            meta["description"] = f"Folder: {video['folder']}\n" + meta["description"]
 
         # Add series info if detected
         if video['is_series']:
@@ -277,12 +289,53 @@ def create_meta_response(file_id: str) -> Optional[dict]:
     return {"meta": meta}
 
 
+# Codecs that are HLS-compatible (H.264+AAC work natively in most players)
+HLS_NATIVE_VIDEO_CODECS = {'h264', 'avc1'}
+HLS_NATIVE_AUDIO_CODECS = {'aac', 'mp4a'}
+
+
+def needs_transcoding(info: dict) -> tuple[bool, str]:
+    """Check if video needs transcoding based on codec compatibility.
+
+    Returns: (needs_transcode, reason)
+    - H.264 + AAC: Can be direct played or transcoded (transcoding optional)
+    - HEVC, VP9, AV1, AC3, DTS, etc.: Requires transcoding to H.264+AAC
+    """
+    if not info:
+        return True, "unknown"
+
+    video_codec = None
+    audio_codec = None
+
+    for stream in info.get('streams', []):
+        codec_type = stream.get('codec_type')
+        if codec_type == 'video' and video_codec is None:
+            video_codec = stream.get('codec_name', '').lower()
+        elif codec_type == 'audio' and audio_codec is None:
+            audio_codec = stream.get('codec_name', '').lower()
+
+    reasons = []
+    if video_codec and video_codec not in HLS_NATIVE_VIDEO_CODECS:
+        reasons.append(f"video:{video_codec}")
+    if audio_codec and audio_codec not in HLS_NATIVE_AUDIO_CODECS:
+        reasons.append(f"audio:{audio_codec}")
+
+    if reasons:
+        return True, ", ".join(reasons)
+    return False, ""
+
+
 def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
     """Create stream response with multiple stream options.
 
     Args:
         file_id: The video file ID (sp_xxx)
         base_url: The SegmentPlayer base URL for stream URLs
+
+    Stream options (in order of preference):
+    1. Direct HLS (H.264+AAC only) - No transcoding, fastest startup
+    2. Direct File - Original file pass-through
+    3. HLS Transcode (various qualities) - For incompatible codecs
     """
     filepath = get_filepath_from_id(file_id)
     if not filepath:
@@ -299,6 +352,7 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
     subtitles = []
     video_height = 0
     video_codec = ""
+    audio_codec = ""
     audio_info = ""
 
     if info:
@@ -325,17 +379,21 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
             lang = audio_streams[0].get('tags', {}).get('language', 'und')
             audio_info = f" | {lang}"
 
-        # Get video info
+        # Get video/audio codec info
         for stream in info.get('streams', []):
-            if stream.get('codec_type') == 'video':
+            if stream.get('codec_type') == 'video' and not video_codec:
                 video_height = stream.get('height', 0)
                 video_codec = stream.get('codec_name', '').upper()
-                break
+            elif stream.get('codec_type') == 'audio' and not audio_codec:
+                audio_codec = stream.get('codec_name', '').upper()
 
-    # 1. Direct File - serve the original file directly
+    # Check if transcoding is needed
+    transcode_needed, transcode_reason = needs_transcoding(info)
+
+    # 1. Direct File - serve the original file directly (best for native codec support)
     direct_stream = {
         "url": f"{base_url}/direct/{encoded_path}",
-        "title": f"Direct Play ({video_codec}){audio_info}",
+        "title": f"Direct File ({video_codec}/{audio_codec}){audio_info}",
         "name": "SegmentPlayer - Direct",
         "behaviorHints": {
             "notWebReady": False,
@@ -346,11 +404,12 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
         direct_stream["subtitles"] = subtitles
     streams.append(direct_stream)
 
-    # 2. HLS Original - single quality at source resolution
+    # 2. HLS Transcode - Original quality (transcodes to H.264+AAC)
+    transcode_note = f" [transcode: {transcode_reason}]" if transcode_needed else ""
     hls_original = {
-        "url": f"{base_url}/transcode/{encoded_path}/master_source.m3u8",
-        "title": f"HLS Original ({video_height}p){audio_info}",
-        "name": "SegmentPlayer - HLS",
+        "url": f"{base_url}/transcode/{encoded_path}/master_original.m3u8",
+        "title": f"HLS {video_height}p{transcode_note}{audio_info}",
+        "name": "HLS Original",
         "behaviorHints": {
             "notWebReady": False,
         }
@@ -359,11 +418,11 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
         hls_original["subtitles"] = subtitles
     streams.append(hls_original)
 
-    # 3. HLS Auto - ABR with all quality variants
+    # 3. HLS Auto (ABR) - Adaptive bitrate with all quality variants
     hls_auto = {
         "url": f"{base_url}/transcode/{encoded_path}/master.m3u8",
-        "title": f"HLS Auto (ABR){audio_info}",
-        "name": "SegmentPlayer - HLS ABR",
+        "title": f"HLS Auto (ABR up to {video_height}p){audio_info}",
+        "name": "HLS ABR",
         "behaviorHints": {
             "notWebReady": False,
         }
@@ -373,6 +432,17 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
     streams.append(hls_auto)
 
     return {"streams": streams}
+
+
+def get_media_file_count() -> int:
+    """Get total count of media files in the media directory."""
+    count = 0
+    for root, dirs, files in os.walk(MEDIA_DIR):
+        for filename in files:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in VIDEO_EXTENSIONS:
+                count += 1
+    return count
 
 
 class StremioHandler:
@@ -389,8 +459,7 @@ class StremioHandler:
     def handle_catalog(self, catalog_type: str, catalog_id: str, extra: dict = None) -> tuple[bytes, str]:
         """Return catalog of videos."""
         search = extra.get('search') if extra else None
-        genre = extra.get('genre') if extra else None
-        response = create_catalog_response(search, genre)
+        response = create_catalog_response(search)
         return json.dumps(response).encode(), 'application/json'
 
     def handle_meta(self, meta_type: str, meta_id: str) -> tuple[Optional[bytes], str]:
