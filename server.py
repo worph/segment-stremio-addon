@@ -139,7 +139,17 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             return self.handle_direct_file(m.group(1))
 
-        # Master playlist (all resolutions)
+        # Master playlist with specific audio track (e.g., master_original_a0.m3u8, master_a1.m3u8)
+        m = re.match(r'^/transcode/(.+?)/master_(\w+)_a(\d+)\.m3u8$', path)
+        if m:
+            return self.handle_master_playlist(m.group(1), m.group(2), int(m.group(3)))
+
+        # ABR master with specific audio track (e.g., master_a0.m3u8)
+        m = re.match(r'^/transcode/(.+?)/master_a(\d+)\.m3u8$', path)
+        if m:
+            return self.handle_master_playlist(m.group(1), None, int(m.group(2)))
+
+        # Master playlist (all resolutions, all audio)
         m = re.match(r'^/transcode/(.+?)/master\.m3u8$', path)
         if m:
             return self.handle_master_playlist(m.group(1))
@@ -255,13 +265,13 @@ class Handler(BaseHTTPRequestHandler):
 
         return full_path, transcoder.get_file_hash(filepath), info
 
-    def handle_master_playlist(self, filepath: str, resolution: str = None):
+    def handle_master_playlist(self, filepath: str, resolution: str = None, audio: int = None):
         """Generate and serve master HLS playlist."""
         full_path, file_hash, info = self.get_file_info(filepath)
         if not info:
             return
 
-        playlist = transcoder.generate_master_playlist(info, resolution)
+        playlist = transcoder.generate_master_playlist(info, resolution, audio)
         self.send_data(playlist.encode(), 'application/vnd.apple.mpegurl')
 
     def handle_stream_playlist(self, filepath: str, audio: int, resolution: str):

@@ -332,10 +332,10 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
         file_id: The video file ID (sp_xxx)
         base_url: The SegmentPlayer base URL for stream URLs
 
-    Stream options (in order of preference):
-    1. Direct HLS (H.264+AAC only) - No transcoding, fastest startup
-    2. Direct File - Original file pass-through
-    3. HLS Transcode (various qualities) - For incompatible codecs
+    Stream options:
+    1. Direct File - Original file pass-through
+    2. HLS Original per audio track - One stream per audio language
+    3. HLS ABR per audio track - Adaptive bitrate per audio language
     """
     filepath = get_filepath_from_id(file_id)
     if not filepath:
@@ -353,7 +353,7 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
     video_height = 0
     video_codec = ""
     audio_codec = ""
-    audio_info = ""
+    audio_tracks = []
 
     if info:
         # Get subtitle tracks
@@ -366,18 +366,28 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
                 "lang": lang,
             })
 
-        # Get audio tracks info for title
+        # Get audio tracks info
         audio_streams = [s for s in info.get('streams', []) if s.get('codec_type') == 'audio']
-        if len(audio_streams) > 1:
-            audio_langs = []
-            for aud in audio_streams:
-                lang = aud.get('tags', {}).get('language', 'und')
-                if lang not in audio_langs:
-                    audio_langs.append(lang)
-            audio_info = f" | {'/'.join(audio_langs)}"
-        elif len(audio_streams) == 1:
-            lang = audio_streams[0].get('tags', {}).get('language', 'und')
-            audio_info = f" | {lang}"
+        for i, aud in enumerate(audio_streams):
+            lang = aud.get('tags', {}).get('language', 'und')
+            title = aud.get('tags', {}).get('title', '')
+            codec = aud.get('codec_name', 'unknown').upper()
+            channels = aud.get('channels', 2)
+
+            # Build display name
+            if title:
+                display_name = title
+            else:
+                lang_name = lang.upper() if lang != 'und' else f"Audio {i+1}"
+                display_name = lang_name
+
+            audio_tracks.append({
+                'index': i,
+                'lang': lang,
+                'name': display_name,
+                'codec': codec,
+                'channels': channels,
+            })
 
         # Get video/audio codec info
         for stream in info.get('streams', []):
@@ -387,14 +397,25 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
             elif stream.get('codec_type') == 'audio' and not audio_codec:
                 audio_codec = stream.get('codec_name', '').upper()
 
+    # Default to one audio track if none detected
+    if not audio_tracks:
+        audio_tracks = [{'index': 0, 'lang': 'und', 'name': 'Default', 'codec': audio_codec, 'channels': 2}]
+
     # Check if transcoding is needed
     transcode_needed, transcode_reason = needs_transcoding(info)
+
+    # Build audio info string for direct stream
+    if len(audio_tracks) > 1:
+        audio_langs = list(dict.fromkeys(t['lang'] for t in audio_tracks))  # unique, preserve order
+        audio_info = f" | {'/'.join(audio_langs)}"
+    else:
+        audio_info = f" | {audio_tracks[0]['lang']}"
 
     # 1. Direct File - serve the original file directly (best for native codec support)
     direct_stream = {
         "url": f"{base_url}/direct/{encoded_path}",
         "title": f"Direct File ({video_codec}/{audio_codec}){audio_info}",
-        "name": "SegmentPlayer - Direct",
+        "name": "SSA Direct",
         "behaviorHints": {
             "notWebReady": False,
             "filename": filename,
@@ -404,32 +425,36 @@ def create_stream_response(file_id: str, base_url: str) -> Optional[dict]:
         direct_stream["subtitles"] = subtitles
     streams.append(direct_stream)
 
-    # 2. HLS Transcode - Original quality (transcodes to H.264+AAC)
+    # 2. HLS Original - One stream per audio track
     transcode_note = f" [transcode: {transcode_reason}]" if transcode_needed else ""
-    hls_original = {
-        "url": f"{base_url}/transcode/{encoded_path}/master_original.m3u8",
-        "title": f"HLS {video_height}p{transcode_note}{audio_info}",
-        "name": "HLS Original",
-        "behaviorHints": {
-            "notWebReady": False,
+    for track in audio_tracks:
+        audio_suffix = f" ({track['name']})" if len(audio_tracks) > 1 else ""
+        hls_stream = {
+            "url": f"{base_url}/transcode/{encoded_path}/master_original_a{track['index']}.m3u8",
+            "title": f"HLS {video_height}p{audio_suffix}{transcode_note}",
+            "name": f"SSA {video_height}p" + (f" {track['name']}" if len(audio_tracks) > 1 else ""),
+            "behaviorHints": {
+                "notWebReady": False,
+            }
         }
-    }
-    if subtitles:
-        hls_original["subtitles"] = subtitles
-    streams.append(hls_original)
+        if subtitles:
+            hls_stream["subtitles"] = subtitles
+        streams.append(hls_stream)
 
-    # 3. HLS Auto (ABR) - Adaptive bitrate with all quality variants
-    hls_auto = {
-        "url": f"{base_url}/transcode/{encoded_path}/master.m3u8",
-        "title": f"HLS Auto (ABR up to {video_height}p){audio_info}",
-        "name": "HLS ABR",
-        "behaviorHints": {
-            "notWebReady": False,
+    # 3. HLS ABR - One stream per audio track
+    for track in audio_tracks:
+        audio_suffix = f" ({track['name']})" if len(audio_tracks) > 1 else ""
+        hls_stream = {
+            "url": f"{base_url}/transcode/{encoded_path}/master_a{track['index']}.m3u8",
+            "title": f"HLS ABR (up to {video_height}p){audio_suffix}",
+            "name": f"SSA ABR" + (f" {track['name']}" if len(audio_tracks) > 1 else ""),
+            "behaviorHints": {
+                "notWebReady": False,
+            }
         }
-    }
-    if subtitles:
-        hls_auto["subtitles"] = subtitles
-    streams.append(hls_auto)
+        if subtitles:
+            hls_stream["subtitles"] = subtitles
+        streams.append(hls_stream)
 
     return {"streams": streams}
 

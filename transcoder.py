@@ -673,11 +673,17 @@ def trigger_prefetch(filepath: str, file_hash: str, audio: int, resolution: str,
         )
 
 
-def generate_master_playlist(info: dict, resolution_filter: str = None) -> str:
+def generate_master_playlist(info: dict, resolution_filter: str = None, audio_filter: int = None) -> str:
     """
-    Generate HLS master playlist with multi-audio support.
+    Generate HLS master playlist.
 
-    Each audio track gets its own stream variant with that audio muxed into the video.
+    Args:
+        info: ffprobe output
+        resolution_filter: Specific resolution (e.g., 'original', '720p') or None for ABR
+        audio_filter: Specific audio track index or None for all tracks
+
+    When audio_filter is specified, generates a simple playlist with just that
+    audio track muxed in - no AUDIO group needed since there's only one option.
     """
     streams = info.get('streams', [])
     video = next((s for s in streams if s.get('codec_type') == 'video'), None)
@@ -685,28 +691,6 @@ def generate_master_playlist(info: dict, resolution_filter: str = None) -> str:
     subtitle_streams = [s for s in streams if s.get('codec_type') == 'subtitle']
 
     lines = ["#EXTM3U", "#EXT-X-VERSION:4", ""]
-
-    # Build audio track metadata
-    audio_tracks = []
-    for i, a in enumerate(audio_streams):
-        lang = a.get('tags', {}).get('language', 'und')
-        title = a.get('tags', {}).get('title', '')
-        channels = a.get('channels', 2)
-
-        codec = a.get('codec_name', 'AAC').upper()
-        ch_str = f"{channels}.0" if channels else "2.0"
-        if title:
-            name = title
-        else:
-            lang_name = lang.upper() if lang != 'und' else f"Audio {i+1}"
-            name = f"{lang_name} - {codec} {ch_str}"
-
-        audio_tracks.append({
-            'index': i,
-            'name': name,
-            'lang': lang,
-            'channels': channels,
-        })
 
     # Subtitle tracks
     sub_counter = 0
@@ -720,14 +704,14 @@ def generate_master_playlist(info: dict, resolution_filter: str = None) -> str:
         lines.append(f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="{name}",LANGUAGE="{lang}",DEFAULT=NO,AUTOSELECT=YES,URI="subtitle_{i}.m3u8"')
         sub_counter += 1
 
-    lines.append("")
+    if sub_counter > 0:
+        lines.append("")
 
     # Video variants
     if video:
         src_w = video.get('width', 1920)
         src_h = video.get('height', 1080)
         subs_ref = ',SUBTITLES="subs"' if sub_counter > 0 else ''
-        audio_ref = ',AUDIO="audio"' if audio_tracks else ''
 
         # Build quality ladder
         if resolution_filter:
@@ -743,38 +727,24 @@ def generate_master_playlist(info: dict, resolution_filter: str = None) -> str:
                 ('360p', 360, 800000),
             ]
 
-        # Audio track declarations - all in same group "audio" with URIs to muxed streams
-        # Each audio track points to a stream playlist that has that audio muxed in
-        # Player switches to different stream when audio is changed
-        for i, track in enumerate(audio_tracks):
-            is_default = 'YES' if i == 0 else 'NO'
-            # Only default track should autoselect - prevents players from prefetching all audio streams
-            autoselect = 'YES' if i == 0 else 'NO'
-            # Use first quality in ladder for audio URI (typically 'original' or the filtered resolution)
-            first_res = quality_order[0][0]
-            lines.append(
-                f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="{track["name"]}",'
-                f'LANGUAGE="{track["lang"]}",CHANNELS="{track["channels"]}",DEFAULT={is_default},AUTOSELECT={autoselect},'
-                f'URI="stream_a{track["index"]}_{first_res}.m3u8"'
-            )
+        # Determine audio track to use
+        audio_index = audio_filter if audio_filter is not None else 0
 
-        if audio_tracks:
-            lines.append("")
-
-        # Stream variants - one per resolution, referencing single audio group
-        # Only generate variants for the default (first) audio track
-        # Audio switching is handled by EXT-X-MEDIA URIs above
+        # Simple playlist - just stream variants, no AUDIO group
+        # Audio is muxed into each stream variant
         for res_key, target_h, bw in quality_order:
             if target_h and target_h > src_h:
                 continue
             if target_h and target_h == src_h:
                 continue
+
             w, h, _ = RESOLUTIONS.get(res_key, RESOLUTIONS['original'])
             width = w or src_w
             height = h or src_h
-            label = f"{height}p (Original)" if res_key == 'original' else f"{height}p"
-            lines.append(f'#EXT-X-STREAM-INF:BANDWIDTH={bw},RESOLUTION={width}x{height}{audio_ref}{subs_ref},NAME="{label}"')
-            lines.append(f"stream_a0_{res_key}.m3u8")
+            res_label = f"{height}p (Original)" if res_key == 'original' else f"{height}p"
+
+            lines.append(f'#EXT-X-STREAM-INF:BANDWIDTH={bw},RESOLUTION={width}x{height}{subs_ref},NAME="{res_label}"')
+            lines.append(f"stream_a{audio_index}_{res_key}.m3u8")
 
     return "\n".join(lines) + "\n"
 
