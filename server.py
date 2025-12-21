@@ -396,14 +396,22 @@ class Handler(BaseHTTPRequestHandler):
     def get_base_url(self) -> str:
         """
         Extract base URL from request headers with intelligent protocol detection.
-        Handles reverse proxy headers (X-Forwarded-Proto, Forwarded, Referer).
+        Handles reverse proxy headers and multiple detection methods.
         """
         host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
 
         # Protocol detection with multiple fallbacks
-        proto = self.headers.get('X-Forwarded-Proto', '')
+        proto = ''
 
-        # Check standard Forwarded header (RFC 7239)
+        # 1. X-Forwarded-Proto (most common reverse proxy header)
+        #    Handle comma-separated values (e.g., "https, http" from multiple proxies)
+        forwarded_proto = self.headers.get('X-Forwarded-Proto', '').lower().strip()
+        if forwarded_proto:
+            # Take the first value (original client protocol) and prefer https if present
+            parts = [p.strip() for p in forwarded_proto.split(',')]
+            proto = 'https' if 'https' in parts else parts[0]
+
+        # 2. Standard Forwarded header (RFC 7239)
         if not proto:
             forwarded = self.headers.get('Forwarded', '')
             if forwarded:
@@ -411,7 +419,21 @@ class Handler(BaseHTTPRequestHandler):
                 if match:
                     proto = match.group(1).lower()
 
-        # Try to infer from Referer header
+        # 3. X-Forwarded-Ssl header (some proxies use this)
+        if not proto:
+            ssl_header = self.headers.get('X-Forwarded-Ssl', '').lower()
+            if ssl_header == 'on':
+                proto = 'https'
+
+        # 4. X-Scheme header (alternative proxy header)
+        if not proto:
+            proto = self.headers.get('X-Scheme', '').lower().strip()
+
+        # 5. Check if port 443 is in the host (explicit HTTPS port)
+        if not proto and ':443' in host:
+            proto = 'https'
+
+        # 6. Try to infer from Referer header
         if not proto:
             referer = self.headers.get('Referer', '')
             if referer:
@@ -419,12 +441,20 @@ class Handler(BaseHTTPRequestHandler):
                 if match:
                     proto = match.group(1).lower()
 
-        # Final fallback: Assume HTTPS for non-localhost domains
+        # 7. Try to infer from Origin header (useful for CORS requests)
+        if not proto:
+            origin = self.headers.get('Origin', '')
+            if origin:
+                match = re.match(r'^(https?)://', origin, re.IGNORECASE)
+                if match:
+                    proto = match.group(1).lower()
+
+        # 8. Final fallback: Assume HTTPS for non-localhost domains
         if not proto:
             is_localhost = 'localhost' in host or '127.0.0.1' in host or '::1' in host
             proto = 'http' if is_localhost else 'https'
 
-        # Remove default ports
+        # Remove default ports from host for cleaner URLs
         clean_host = host.replace(':80', '').replace(':443', '')
 
         return f"{proto}://{clean_host}"
