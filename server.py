@@ -12,6 +12,8 @@ Environment Variables:
 - MEDIA_DIR: Directory containing video files (default: /data/media)
 - CACHE_DIR: Directory for transcoded segments (default: /data/cache)
 - PORT: HTTP server port (default: 7000)
+- SCHEME: URL scheme for generated URLs (http/https). If not set, auto-detects:
+          localhost/127.0.0.1 = http, otherwise https
 - SEGMENT_DURATION: HLS segment length in seconds (default: 4)
 - PREFETCH_SEGMENTS: How many segments to prefetch ahead (default: 4)
 """
@@ -29,6 +31,7 @@ import transcoder
 
 # Configuration
 PORT = int(os.environ.get('PORT', '7000'))
+SCHEME = os.environ.get('SCHEME', '').lower().strip()  # http, https, or empty for auto-detect
 
 # Global Stremio handler
 stremio_handler = StremioHandler()
@@ -395,62 +398,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_base_url(self) -> str:
         """
-        Extract base URL from request headers with intelligent protocol detection.
-        Handles reverse proxy headers and multiple detection methods.
+        Extract base URL from request headers with protocol detection.
+        Uses SCHEME env var if set, otherwise auto-detects based on host.
         """
         host = self.headers.get('X-Forwarded-Host') or self.headers.get('Host', 'localhost')
 
-        # Protocol detection with multiple fallbacks
-        proto = ''
-
-        # 1. X-Forwarded-Proto (most common reverse proxy header)
-        #    Handle comma-separated values (e.g., "https, http" from multiple proxies)
-        forwarded_proto = self.headers.get('X-Forwarded-Proto', '').lower().strip()
-        if forwarded_proto:
-            # Take the first value (original client protocol) and prefer https if present
-            parts = [p.strip() for p in forwarded_proto.split(',')]
-            proto = 'https' if 'https' in parts else parts[0]
-
-        # 2. Standard Forwarded header (RFC 7239)
-        if not proto:
-            forwarded = self.headers.get('Forwarded', '')
-            if forwarded:
-                match = re.search(r'proto=([^;,\s]+)', forwarded, re.IGNORECASE)
-                if match:
-                    proto = match.group(1).lower()
-
-        # 3. X-Forwarded-Ssl header (some proxies use this)
-        if not proto:
-            ssl_header = self.headers.get('X-Forwarded-Ssl', '').lower()
-            if ssl_header == 'on':
-                proto = 'https'
-
-        # 4. X-Scheme header (alternative proxy header)
-        if not proto:
-            proto = self.headers.get('X-Scheme', '').lower().strip()
-
-        # 5. Check if port 443 is in the host (explicit HTTPS port)
-        if not proto and ':443' in host:
-            proto = 'https'
-
-        # 6. Try to infer from Referer header
-        if not proto:
-            referer = self.headers.get('Referer', '')
-            if referer:
-                match = re.match(r'^(https?)://', referer, re.IGNORECASE)
-                if match:
-                    proto = match.group(1).lower()
-
-        # 7. Try to infer from Origin header (useful for CORS requests)
-        if not proto:
-            origin = self.headers.get('Origin', '')
-            if origin:
-                match = re.match(r'^(https?)://', origin, re.IGNORECASE)
-                if match:
-                    proto = match.group(1).lower()
-
-        # 8. Final fallback: Assume HTTPS for non-localhost domains
-        if not proto:
+        # Use SCHEME env var if set, otherwise auto-detect
+        if SCHEME:
+            proto = SCHEME
+        else:
+            # Auto-detect: localhost = http, otherwise https
             is_localhost = 'localhost' in host or '127.0.0.1' in host or '::1' in host
             proto = 'http' if is_localhost else 'https'
 
