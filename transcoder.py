@@ -437,11 +437,15 @@ class SubtitleManager:
             with open(error_file, 'r', encoding='utf-8') as f:
                 return None, f.read()
 
-        # Check subtitle codec
+        # Get subtitle stream info
+        codec = None
+        track_index = None
         if info:
             subtitle_streams = [s for s in info.get('streams', []) if s.get('codec_type') == 'subtitle']
             if sub_index < len(subtitle_streams):
-                codec = subtitle_streams[sub_index].get('codec_name', '')
+                stream = subtitle_streams[sub_index]
+                codec = stream.get('codec_name', '')
+                track_index = stream.get('index')
                 if codec in UNSUPPORTED_SUBTITLE_CODECS:
                     error_msg = f"Subtitle format '{codec}' is image-based and cannot be converted to WebVTT"
                     with open(error_file, 'w', encoding='utf-8') as f:
@@ -450,19 +454,77 @@ class SubtitleManager:
 
         try:
             print(f"[Subtitle {sub_index}] Extracting from {os.path.basename(filepath)}...")
+            is_mkv = filepath.lower().endswith(('.mkv', '.mka', '.mks'))
 
-            result = subprocess.run(
-                ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
-                 '-probesize', '5M', '-analyzeduration', '5M',
-                 '-i', filepath,
-                 '-map', f'0:s:{sub_index}',
-                 '-vn', '-an',
-                 '-c:s', 'webvtt', '-f', 'webvtt', temp_file],
-                capture_output=True,
-                timeout=600
-            )
+            # Determine intermediate format based on codec
+            codec_ext_map = {
+                'subrip': 'srt', 'srt': 'srt',
+                'ass': 'ass', 'ssa': 'ssa',
+                'webvtt': 'vtt', 'mov_text': 'srt'
+            }
+            intermediate_ext = codec_ext_map.get(codec, 'srt') if codec else 'srt'
+            intermediate_file = os.path.join(cache_dir, f"subtitle_{sub_index}.{intermediate_ext}")
 
-            if result.returncode == 0 and os.path.exists(temp_file):
+            extracted = False
+
+            # Method 1: Try mkvextract for MKV files (fastest)
+            if is_mkv and track_index is not None:
+                try:
+                    result = subprocess.run(
+                        ['mkvextract', 'tracks', filepath, f'{track_index}:{intermediate_file}'],
+                        capture_output=True,
+                        timeout=120
+                    )
+                    if result.returncode == 0 and os.path.exists(intermediate_file):
+                        extracted = True
+                        print(f"[Subtitle {sub_index}] Extracted via mkvextract")
+                except FileNotFoundError:
+                    pass  # mkvextract not installed, fall back to ffmpeg
+                except Exception as e:
+                    print(f"[Subtitle {sub_index}] mkvextract failed: {e}, trying ffmpeg")
+
+            # Method 2: FFmpeg copy codec (fast demux, no re-encoding)
+            if not extracted:
+                result = subprocess.run(
+                    ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+                     '-probesize', '1M', '-analyzeduration', '1M',
+                     '-i', filepath,
+                     '-map', f'0:s:{sub_index}',
+                     '-c:s', 'copy', intermediate_file],
+                    capture_output=True,
+                    timeout=300
+                )
+                if result.returncode == 0 and os.path.exists(intermediate_file):
+                    extracted = True
+                    print(f"[Subtitle {sub_index}] Extracted via ffmpeg copy")
+
+            # Convert to WebVTT if needed
+            if extracted and os.path.exists(intermediate_file):
+                if intermediate_ext == 'vtt':
+                    # Already VTT, just rename
+                    os.rename(intermediate_file, temp_file)
+                else:
+                    # Convert to WebVTT
+                    result = subprocess.run(
+                        ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+                         '-i', intermediate_file,
+                         '-c:s', 'webvtt', '-f', 'webvtt', temp_file],
+                        capture_output=True,
+                        timeout=60
+                    )
+                    # Clean up intermediate file
+                    if os.path.exists(intermediate_file):
+                        os.remove(intermediate_file)
+
+                    if result.returncode != 0:
+                        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else 'Unknown error'
+                        error_msg = f"VTT conversion failed: {stderr[:200]}"
+                        with open(error_file, 'w', encoding='utf-8') as f:
+                            f.write(error_msg)
+                        return None, error_msg
+
+            # Validate and finalize
+            if os.path.exists(temp_file):
                 file_size = os.path.getsize(temp_file)
                 if file_size > 10:
                     os.rename(temp_file, vtt_file)
@@ -473,8 +535,7 @@ class SubtitleManager:
                     error_msg = "Extraction produced empty VTT file"
                     os.remove(temp_file)
             else:
-                stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else 'Unknown error'
-                error_msg = f"FFmpeg error: {stderr[:200]}"
+                error_msg = "Extraction failed - no output file"
 
             with open(error_file, 'w', encoding='utf-8') as f:
                 f.write(error_msg)
