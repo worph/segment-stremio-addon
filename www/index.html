@@ -424,7 +424,7 @@
                 <div id="metricsContent">
                     <div class="idle-message" id="idleMessage">
                         <div style="margin-bottom: 0.5rem;">No active transcoding</div>
-                        <div style="font-size: 0.9rem;">Media library: <strong id="totalFilesIdle">0</strong> files</div>
+                        <div style="font-size: 0.9rem;">Media library: <strong id="totalFilesIdle">0</strong> files | Segment: <strong id="segmentDurationIdle">10</strong>s</div>
                         <div style="font-size: 0.85rem; margin-top: 0.5rem;">Start playing a video in Stremio to see live metrics.</div>
                     </div>
                 </div>
@@ -435,7 +435,8 @@
                     </div>
                     <div class="metrics-section">
                         <h3>Source Codecs</h3>
-                        <div class="metrics-grid" style="grid-template-columns: 1fr 1fr;">
+                        <p style="font-size: 0.75rem; color: #888; margin-bottom: 0.5rem;">Original file codecs being transcoded to H.264/AAC</p>
+                        <div class="metrics-grid" style="grid-template-columns: 1fr 1fr 1fr;">
                             <div class="metric-item">
                                 <div class="metric-value" id="metricVideoCodec">-</div>
                                 <div class="metric-label">Video</div>
@@ -444,10 +445,15 @@
                                 <div class="metric-value" id="metricAudioCodec">-</div>
                                 <div class="metric-label">Audio</div>
                             </div>
+                            <div class="metric-item">
+                                <div class="metric-value" id="metricSegmentDuration">10s</div>
+                                <div class="metric-label">Segment</div>
+                            </div>
                         </div>
                     </div>
                     <div class="metrics-section">
                         <h3>Adaptive Quality</h3>
+                        <p style="font-size: 0.75rem; color: #888; margin-bottom: 0.5rem;">Auto-adjusts encoding speed vs quality based on CPU performance</p>
                         <div class="adaptive-grid">
                             <div class="adaptive-item">
                                 <div class="adaptive-label">Encoder Preset</div>
@@ -483,6 +489,7 @@
                     </div>
                     <div class="metrics-section">
                         <h3>Transcode Ratio</h3>
+                        <p style="font-size: 0.75rem; color: #888; margin-bottom: 0.5rem;">Time to encode vs segment duration. 60-80% is optimal (green zone)</p>
                         <div class="ratio-gauge">
                             <div class="ratio-bar">
                                 <div class="ratio-target"></div>
@@ -499,6 +506,7 @@
                     </div>
                     <div class="metrics-section">
                         <h3>Performance</h3>
+                        <p style="font-size: 0.75rem; color: #888; margin-bottom: 0.5rem;">Cache hits skip transcoding. Higher cache = faster seeks</p>
                         <div class="metrics-grid">
                             <div class="metric-item">
                                 <div class="metric-value" id="metricRatioAvg">-</div>
@@ -724,9 +732,13 @@
 
                 const data = await response.json();
 
-                // Update total files count (always, even when idle)
+                // Update total files count and segment duration (always, even when idle)
                 if (data.total_files !== undefined) {
                     document.getElementById("totalFilesIdle").textContent = data.total_files;
+                }
+                if (data.segment_duration !== undefined) {
+                    document.getElementById("segmentDurationIdle").textContent = data.segment_duration;
+                    document.getElementById("metricSegmentDuration").textContent = data.segment_duration + "s";
                 }
 
                 // Check if there's any transcoding activity
