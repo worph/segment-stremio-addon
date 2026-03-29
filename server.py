@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, unquote
 import threading
@@ -32,6 +33,11 @@ import transcoder
 # Configuration
 PORT = int(os.environ.get('PORT', '7000'))
 SCHEME = os.environ.get('SCHEME', '').lower().strip()  # http, https, or empty for auto-detect
+
+# API key protection: when HASH_API_SEED is set, all API routes require /{key}/api/ prefix
+HASH_API_SEED = os.environ.get('HASH_API_SEED', '').strip()
+API_KEY = hashlib.sha256(HASH_API_SEED.encode()).hexdigest()[:16] if HASH_API_SEED else ''
+API_PREFIX = f'/api/{API_KEY}' if API_KEY else ''  # e.g. /api/a1b2c3d4e5f67890
 
 # Global Stremio handler
 stremio_handler = StremioHandler()
@@ -59,16 +65,43 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_OPTIONS(self):
+        # Allow CORS preflight without auth check (browsers send OPTIONS without custom paths)
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Range')
         self.end_headers()
 
+    def strip_api_prefix(self, path: str) -> str | None:
+        """Strip the API key prefix from path if API protection is enabled.
+
+        Returns the stripped path, or None if the key is invalid.
+        Unprotected paths (/, /health) are returned as-is.
+        """
+        if not API_KEY:
+            return path
+
+        # These paths are always accessible without the key
+        if path in ('/', '/index.html', '/health'):
+            return path
+
+        # All other paths must start with the API prefix
+        if path.startswith(API_PREFIX + '/'):
+            return path[len(API_PREFIX):]
+        if path == API_PREFIX:
+            return '/'
+
+        return None
+
     def do_HEAD(self):
         """Handle HEAD requests for health checks and streaming."""
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+
+        path = self.strip_api_prefix(path)
+        if path is None:
+            self.send_error(401, "Unauthorized")
+            return
 
         if path.startswith('/stremio/') or path == '/' or path.startswith('/manifest.json'):
             self.send_response(200)
@@ -96,6 +129,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+
+        # Strip API key prefix if protection is enabled
+        path = self.strip_api_prefix(path)
+        if path is None:
+            self.send_error(401, "Unauthorized")
+            return
 
         # Root - serve setup page
         if path == '/' or path == '/index.html':
@@ -190,6 +229,9 @@ class Handler(BaseHTTPRequestHandler):
         if os.path.exists(html_path):
             with open(html_path, 'r', encoding='utf-8') as f:
                 content = f.read()
+            # Inject API prefix so JavaScript can build correct URLs
+            prefix_script = f'<script>window.API_PREFIX = "{API_PREFIX}";</script>'
+            content = content.replace('</head>', f'{prefix_script}\n</head>', 1)
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.send_header('Content-Length', len(content.encode('utf-8')))
@@ -197,13 +239,15 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(content.encode('utf-8'))
         else:
             # Fallback minimal page
+            base = self.get_base_url()
+            stremio_host = self.headers.get('Host', 'localhost')
             content = f"""<!DOCTYPE html>
 <html>
 <head><title>SegmentPlayer Stremio Addon</title></head>
 <body style="font-family: sans-serif; background: #1a1a2e; color: #fff; padding: 2rem;">
 <h1>SegmentPlayer Stremio Addon</h1>
-<p>Install URL: <code>{self.get_base_url()}/manifest.json</code></p>
-<p><a href="stremio://{self.headers.get('Host', 'localhost')}/manifest.json" style="color: #4dabf7;">Install in Stremio</a></p>
+<p>Install URL: <code>{base}/manifest.json</code></p>
+<p><a href="stremio://{stremio_host}{API_PREFIX}/manifest.json" style="color: #4dabf7;">Install in Stremio</a></p>
 </body>
 </html>"""
             self.send_response(200)
@@ -414,7 +458,7 @@ class Handler(BaseHTTPRequestHandler):
         # Remove default ports from host for cleaner URLs
         clean_host = host.replace(':80', '').replace(':443', '')
 
-        return f"{proto}://{clean_host}"
+        return f"{proto}://{clean_host}{API_PREFIX}"
 
 
 class ThreadedServer(HTTPServer):
@@ -435,8 +479,12 @@ def main():
     print(f"Stremio Addon with HLS Transcoder starting on port {PORT}")
     print(f"Media: {transcoder.MEDIA_DIR} | Cache: {transcoder.CACHE_DIR}")
     print(f"Segment: {transcoder.SEGMENT_DURATION}s | Prefetch: {transcoder.PREFETCH_SEGMENTS} segments")
-    print(f"Manifest URL: http://localhost:{PORT}/manifest.json")
-    print(f"Metrics URL: http://localhost:{PORT}/transcode/metrics")
+    print(f"Manifest URL: http://localhost:{PORT}{API_PREFIX}/manifest.json")
+    print(f"Metrics URL: http://localhost:{PORT}{API_PREFIX}/transcode/metrics")
+    if API_KEY:
+        print(f"API protection: enabled (key: {API_KEY})")
+    else:
+        print("API protection: disabled (set HASH_API_SEED to enable)")
     print("Adaptive quality: target 60-80% transcode ratio")
     ThreadedServer(('0.0.0.0', PORT), Handler).serve_forever()
 

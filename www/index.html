@@ -577,11 +577,14 @@
 
 
             <h3>Step 2: Install in Stremio</h3>
+            <p>You can install this addon from either the <strong>local Stremio app</strong> (Windows, macOS, Linux, Android, iOS)
+                or from <a href="https://web.strem.io/" target="_blank"><strong>Stremio Web</strong></a> at
+                <code>https://web.strem.io/</code> — both work the same way:</p>
 
             <div class="step">
                 <div class="step-number">1</div>
                 <div class="step-content">
-                    <p>Open Stremio and go to <strong>Settings</strong> (gear icon) > <strong>Addons</strong></p>
+                    <p>Open the Stremio app or go to <a href="https://web.strem.io/" target="_blank">web.strem.io</a>, then navigate to <strong>Settings</strong> (gear icon) > <strong>Addons</strong></p>
                 </div>
             </div>
 
@@ -660,8 +663,8 @@
             <h3>Testing the Addon</h3>
             <p>You can verify the addon is working by opening these URLs in your browser:</p>
             <ul>
-                <li><a href="/manifest.json" target="_blank">/manifest.json</a> - Should show addon info</li>
-                <li><a href="/catalog/movie/segmentplayer_all.json" target="_blank">/catalog/movie/segmentplayer_all.json</a> - Should list your videos</li>
+                <li><a id="testManifest" href="/manifest.json" target="_blank">/manifest.json</a> - Should show addon info</li>
+                <li><a id="testCatalog" href="/catalog/movie/ssa_all.json" target="_blank">/catalog/movie/ssa_all.json</a> - Should list your videos</li>
             </ul>
         </div>
 
@@ -672,7 +675,8 @@
         function getAddonUrl() {
             const protocol = window.location.protocol;
             const host = window.location.host;
-            return `${protocol}//${host}/manifest.json`;
+            const prefix = window.API_PREFIX || '';
+            return `${protocol}//${host}${prefix}/manifest.json`;
         }
 
         // Update URL display on page load
@@ -685,6 +689,13 @@
             return `stremio://${manifestUrl.replace(/^https?:\/\//, '')}`;
         }
         document.getElementById('installBtn').href = getInstallUrl();
+
+        // Update test links with API prefix
+        const prefix = window.API_PREFIX || '';
+        document.getElementById('testManifest').href = prefix + '/manifest.json';
+        document.getElementById('testManifest').textContent = prefix + '/manifest.json';
+        document.getElementById('testCatalog').href = prefix + '/catalog/movie/ssa_all.json';
+        document.getElementById('testCatalog').textContent = prefix + '/catalog/movie/ssa_all.json';
 
         // Copy URL to clipboard
         function copyUrl() {
@@ -727,7 +738,7 @@
 
         async function fetchMetrics() {
             try {
-                const response = await fetch("/transcode/metrics");
+                const response = await fetch((window.API_PREFIX || '') + "/transcode/metrics");
                 if (!response.ok) return;
 
                 const data = await response.json();
