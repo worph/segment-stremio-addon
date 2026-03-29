@@ -1,0 +1,19 @@
+services:
+  stremio-addon:
+    build: .
+    ports:
+      - "7000:7000"
+    environment:
+      - MEDIA_DIR=/data/media
+      - CACHE_DIR=/data/cache
+      - PORT=7000
+      - SCHEME=http
+      - SEGMENT_DURATION=4
+      - PREFETCH_SEGMENTS=4
+      - HASH_API_SEED=dev-secret
+    volumes:
+      - ./media:/data/media:ro
+      - segment-cache:/data/cache
+
+volumes:
+  segment-cache:
